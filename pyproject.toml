@@ -1,0 +1,18 @@
+[project]
+name = "catrees"
+version = "0.1.0"
+description = "CLI tool to find California native trees"
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+    "pyinaturalist",
+    "psycopg2-binary",
+    "tabulate",
+]
+
+[project.scripts]
+catrees = "catrees.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
