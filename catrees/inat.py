@@ -1,10 +1,22 @@
 """iNaturalist API wrapper using pyinaturalist."""
 
+import math
 from collections import defaultdict
 
 from pyinaturalist import get_observations, get_taxa
 
 CA_PLACE_ID = 14  # California
+
+_EARTH_RADIUS_KM = 6371.0
+
+
+def haversine_km(lat1, lng1, lat2, lng2):
+    """Return the great-circle distance in km between two points."""
+    lat1, lng1, lat2, lng2 = (math.radians(v) for v in (lat1, lng1, lat2, lng2))
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return _EARTH_RADIUS_KM * 2 * math.asin(math.sqrt(a))
 
 
 def _parse_location(obs):
@@ -133,7 +145,16 @@ def resolve_taxon(name):
     results = response.get("results", [])
     if not results:
         return None
+
+    # Prefer an exact match on preferred_common_name or scientific name
+    name_lower = name.lower()
     taxon = results[0]
+    for r in results:
+        if (r.get("preferred_common_name", "").lower() == name_lower
+                or r.get("name", "").lower() == name_lower):
+            taxon = r
+            break
+
     return (
         taxon["id"],
         taxon.get("name", ""),

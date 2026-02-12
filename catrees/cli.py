@@ -161,6 +161,33 @@ def find(name):
 
 @cli.command()
 @click.argument("name")
+@click.option("--lat", required=True, type=float, help="Latitude of reference point")
+@click.option("--lng", required=True, type=float, help="Longitude of reference point")
+def nearest(name, lat, lng):
+    """Find the closest observations of a species to a given point."""
+    result = inat.resolve_taxon(name)
+    if not result:
+        click.echo(f"Could not find '{name}' on iNaturalist.")
+        return
+
+    taxon_id, sci_name, common_name = result
+    display_name = f"{common_name} ({sci_name})" if common_name else sci_name
+    click.echo(f"Fetching observations for {display_name} in California...")
+
+    observations = inat.get_species_observations_in_ca(taxon_id)
+    if not observations:
+        click.echo(f"No observations found for {display_name} in California.")
+        return
+
+    sorted_obs = sorted(
+        ((inat.haversine_km(lat, lng, obs["lat"], obs["lng"]), obs) for obs in observations),
+        key=lambda x: x[0],
+    )
+    display.show_nearest(sorted_obs, lat, lng)
+
+
+@cli.command()
+@click.argument("name")
 @click.option("--county", required=True, help="County name where observed")
 def observe(name, county):
     """Record a personal observation of a species."""

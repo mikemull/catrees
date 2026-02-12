@@ -53,6 +53,31 @@ def show_clusters(clusters, species_name):
     click.echo(f"\n{total} total observations across {len(clusters)} locations")
 
 
+def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
+    """Display observations sorted by distance from a given point."""
+    if not sorted_observations:
+        click.echo("No observations found.")
+        return
+
+    table = []
+    for i, (dist, obs) in enumerate(sorted_observations[:limit], 1):
+        table.append([
+            i,
+            f"{dist:.1f}",
+            obs.get("place_guess", ""),
+            f"{obs['lat']:.4f}",
+            f"{obs['lng']:.4f}",
+            obs.get("observed_on", ""),
+        ])
+
+    click.echo(tabulate(
+        table,
+        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On"],
+        tablefmt="simple",
+    ))
+    click.echo(f"\nShowing {min(limit, len(sorted_observations))} of {len(sorted_observations)} observations")
+
+
 def show_targets(targets, detail=False):
     """Display the targets list.
 
