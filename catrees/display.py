@@ -64,15 +64,18 @@ def show_targets(targets, detail=False):
 
     if not detail:
         table = [
-            [t["id"], t["common_name"] or "", t["scientific_name"], len(t["locations"])]
+            [t["id"], t["common_name"] or "", t["scientific_name"],
+             f"{t['search_lat']}, {t['search_lng']}" if t.get("search_lat") else "",
+             len(t["locations"])]
             for t in targets
         ]
-        click.echo(tabulate(table, headers=["ID", "Common Name", "Scientific Name", "Locations"], tablefmt="simple"))
+        click.echo(tabulate(table, headers=["ID", "Common Name", "Scientific Name", "Search Location", "Locations"], tablefmt="simple"))
         click.echo(f"\n{len(targets)} targets")
     else:
         for t in targets:
             name = f"{t['common_name']} ({t['scientific_name']})" if t["common_name"] else t["scientific_name"]
-            click.echo(f"\n[{t['id']}] {name}")
+            search = f" — searched near {t['search_lat']}, {t['search_lng']}" if t.get("search_lat") else ""
+            click.echo(f"\n[{t['id']}] {name}{search}")
             if t["locations"]:
                 loc_table = [
                     [loc["lat"], loc["lng"], loc.get("observed_on", ""), loc.get("place_guess", "")]

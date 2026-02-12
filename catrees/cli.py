@@ -118,6 +118,8 @@ def nearby(lat, lng, radius, user):
             sp["common_name"],
             sp["taxon_id"],
             sp.get("locations", []),
+            search_lat=lat,
+            search_lng=lng,
         )
         if was_added:
             click.echo(f"  Added: {sp['common_name'] or sp['scientific_name']}")

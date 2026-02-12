@@ -177,6 +177,8 @@ def ensure_targets_tables():
                 scientific_name TEXT NOT NULL UNIQUE,
                 common_name TEXT,
                 inat_taxon_id INTEGER,
+                search_lat DOUBLE PRECISION,
+                search_lng DOUBLE PRECISION,
                 added_at TIMESTAMP DEFAULT NOW()
             )
         """)
@@ -192,7 +194,8 @@ def ensure_targets_tables():
         """)
 
 
-def add_target(scientific_name, common_name, inat_taxon_id, locations):
+def add_target(scientific_name, common_name, inat_taxon_id, locations,
+               search_lat=None, search_lng=None):
     """Insert a target species with its observation locations.
 
     Skips if the species is already in the targets table.
@@ -206,9 +209,9 @@ def add_target(scientific_name, common_name, inat_taxon_id, locations):
         if cur.fetchone():
             return False
         cur.execute(
-            "INSERT INTO targets (scientific_name, common_name, inat_taxon_id) "
-            "VALUES (%s, %s, %s) RETURNING id",
-            (scientific_name, common_name, inat_taxon_id),
+            "INSERT INTO targets (scientific_name, common_name, inat_taxon_id, search_lat, search_lng) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (scientific_name, common_name, inat_taxon_id, search_lat, search_lng),
         )
         target_id = cur.fetchone()[0]
         for loc in locations:
@@ -228,7 +231,8 @@ def get_targets():
     """
     with get_cursor() as cur:
         cur.execute(
-            "SELECT id, scientific_name, common_name, inat_taxon_id, added_at "
+            "SELECT id, scientific_name, common_name, inat_taxon_id, "
+            "search_lat, search_lng, added_at "
             "FROM targets ORDER BY added_at"
         )
         targets = []
