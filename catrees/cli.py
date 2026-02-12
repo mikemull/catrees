@@ -163,7 +163,8 @@ def find(name):
 @click.argument("name")
 @click.option("--lat", required=True, type=float, help="Latitude of reference point")
 @click.option("--lng", required=True, type=float, help="Longitude of reference point")
-def nearest(name, lat, lng):
+@click.option("--map", "map_path", default=None, type=click.Path(), help="Save an HTML map to this path")
+def nearest(name, lat, lng, map_path):
     """Find the closest observations of a species to a given point."""
     result = inat.resolve_taxon(name)
     if not result:
@@ -184,6 +185,9 @@ def nearest(name, lat, lng):
         key=lambda x: x[0],
     )
     display.show_nearest(sorted_obs, lat, lng)
+
+    if map_path:
+        display.map_nearest(sorted_obs, lat, lng, display_name, map_path)
 
 
 @cli.command()

@@ -78,6 +78,36 @@ def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
     click.echo(f"\nShowing {min(limit, len(sorted_observations))} of {len(sorted_observations)} observations")
 
 
+def map_nearest(sorted_observations, from_lat, from_lng, species_name, path):
+    """Generate a folium HTML map of nearest observations."""
+    import folium
+
+    m = folium.Map(location=[from_lat, from_lng], zoom_start=9)
+
+    # Reference point marker
+    folium.Marker(
+        [from_lat, from_lng],
+        popup="You",
+        icon=folium.Icon(color="red", icon="home", prefix="fa"),
+    ).add_to(m)
+
+    # Observation markers
+    for i, (dist, obs) in enumerate(sorted_observations, 1):
+        popup_text = (
+            f"#{i} — {dist:.1f} km<br>"
+            f"{obs.get('place_guess', '')}<br>"
+            f"{obs.get('observed_on', '')}"
+        )
+        folium.Marker(
+            [obs["lat"], obs["lng"]],
+            popup=popup_text,
+            icon=folium.Icon(color="green", icon="tree", prefix="fa"),
+        ).add_to(m)
+
+    m.save(path)
+    click.echo(f"Map saved to {path}")
+
+
 def show_targets(targets, detail=False):
     """Display the targets list.
 
