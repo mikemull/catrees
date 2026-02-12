@@ -22,16 +22,17 @@ def show_nearby_results(species_list):
     """Display nearby native tree species with observation counts.
 
     species_list: list of dicts with scientific_name, common_name, count, db_common_name
+    Rows are numbered starting at 1 for interactive selection.
     """
     if not species_list:
         click.echo("No CA native trees found in this area (that you haven't seen).")
         return
 
     table = [
-        [s["common_name"] or s.get("db_common_name", ""), s["scientific_name"], s["count"]]
-        for s in species_list
+        [i, s["common_name"] or s.get("db_common_name", ""), s["scientific_name"], s["count"]]
+        for i, s in enumerate(species_list, 1)
     ]
-    click.echo(tabulate(table, headers=["Common Name", "Scientific Name", "Observations"], tablefmt="simple"))
+    click.echo(tabulate(table, headers=["#", "Common Name", "Scientific Name", "Observations"], tablefmt="simple"))
     click.echo(f"\n{len(species_list)} species")
 
 
@@ -50,3 +51,34 @@ def show_clusters(clusters, species_name):
     click.echo(tabulate(table, headers=["#", "Location", "Observations", "Last Seen"], tablefmt="simple"))
     total = sum(c["count"] for c in clusters)
     click.echo(f"\n{total} total observations across {len(clusters)} locations")
+
+
+def show_targets(targets, detail=False):
+    """Display the targets list.
+
+    If detail is True, show individual locations for each target.
+    """
+    if not targets:
+        click.echo("No targets saved. Use 'catrees nearby' to find and add species.")
+        return
+
+    if not detail:
+        table = [
+            [t["id"], t["common_name"] or "", t["scientific_name"], len(t["locations"])]
+            for t in targets
+        ]
+        click.echo(tabulate(table, headers=["ID", "Common Name", "Scientific Name", "Locations"], tablefmt="simple"))
+        click.echo(f"\n{len(targets)} targets")
+    else:
+        for t in targets:
+            name = f"{t['common_name']} ({t['scientific_name']})" if t["common_name"] else t["scientific_name"]
+            click.echo(f"\n[{t['id']}] {name}")
+            if t["locations"]:
+                loc_table = [
+                    [loc["lat"], loc["lng"], loc.get("observed_on", ""), loc.get("place_guess", "")]
+                    for loc in t["locations"]
+                ]
+                click.echo(tabulate(loc_table, headers=["Lat", "Lng", "Observed On", "Place"], tablefmt="simple"))
+            else:
+                click.echo("  No locations recorded.")
+        click.echo(f"\n{len(targets)} targets")

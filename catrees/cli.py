@@ -90,6 +90,43 @@ def nearby(lat, lng, radius, user):
 
     display.show_nearby_results(inat_species)
 
+    if not inat_species:
+        return
+
+    # Interactive target selection
+    selection = click.prompt(
+        "\nAdd to targets (e.g. 1,3,5 or 'none')", default="none"
+    )
+    if selection.strip().lower() == "none":
+        return
+
+    db.ensure_targets_tables()
+
+    indices = []
+    for part in selection.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part)
+            if 1 <= idx <= len(inat_species):
+                indices.append(idx - 1)
+
+    added = 0
+    for idx in indices:
+        sp = inat_species[idx]
+        was_added = db.add_target(
+            sp["scientific_name"],
+            sp["common_name"],
+            sp["taxon_id"],
+            sp.get("locations", []),
+        )
+        if was_added:
+            click.echo(f"  Added: {sp['common_name'] or sp['scientific_name']}")
+            added += 1
+        else:
+            click.echo(f"  Already targeted: {sp['common_name'] or sp['scientific_name']}")
+
+    click.echo(f"{added} species added to targets.")
+
 
 @cli.command()
 @click.argument("name")
@@ -138,6 +175,28 @@ def observe(name, county):
 
     db.record_observation(sp["id"], county_id=county_id)
     click.echo(f"Recorded observation of {sp['common_name']} ({sp['scientific_name']}) in {county} County")
+
+
+@cli.group(invoke_without_command=True)
+@click.option("--detail", is_flag=True, help="Show locations for each target")
+@click.pass_context
+def targets(ctx, detail):
+    """View and manage target species."""
+    if ctx.invoked_subcommand is None:
+        db.ensure_targets_tables()
+        all_targets = db.get_targets()
+        display.show_targets(all_targets, detail=detail)
+
+
+@targets.command("remove")
+@click.argument("target_id", type=int)
+def targets_remove(target_id):
+    """Remove a target species by ID."""
+    db.ensure_targets_tables()
+    if db.remove_target(target_id):
+        click.echo(f"Removed target {target_id}.")
+    else:
+        click.echo(f"Target {target_id} not found.")
 
 
 if __name__ == "__main__":

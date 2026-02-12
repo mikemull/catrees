@@ -7,6 +7,40 @@ from pyinaturalist import get_observations, get_taxa
 CA_PLACE_ID = 14  # California
 
 
+def _parse_location(obs):
+    """Extract lat/lng/observed_on/place_guess from an observation dict.
+
+    Returns a dict or None if location can't be parsed.
+    """
+    location = obs.get("location")
+    if not location:
+        return None
+    if isinstance(location, (list, tuple)):
+        if len(location) != 2:
+            return None
+        try:
+            lat, lng = float(location[0]), float(location[1])
+        except (ValueError, TypeError):
+            return None
+    else:
+        parts = location.split(",")
+        if len(parts) != 2:
+            return None
+        try:
+            lat, lng = float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+    observed_on = obs.get("observed_on", "")
+    if hasattr(observed_on, "isoformat"):
+        observed_on = observed_on.isoformat()[:10]
+    return {
+        "lat": lat,
+        "lng": lng,
+        "observed_on": str(observed_on) if observed_on else "",
+        "place_guess": obs.get("place_guess", ""),
+    }
+
+
 def get_nearby_observations(lat, lng, radius_km, taxon_ids=None, max_pages=3):
     """Fetch research-grade observations near a point.
 
@@ -16,7 +50,8 @@ def get_nearby_observations(lat, lng, radius_km, taxon_ids=None, max_pages=3):
     Returns a list of dicts with taxon info and observation counts.
     """
     species_counts = defaultdict(
-        lambda: {"count": 0, "taxon_id": None, "scientific_name": "", "common_name": ""}
+        lambda: {"count": 0, "taxon_id": None, "scientific_name": "",
+                 "common_name": "", "locations": []}
     )
 
     for page in range(1, max_pages + 1):
@@ -50,6 +85,13 @@ def get_nearby_observations(lat, lng, radius_km, taxon_ids=None, max_pages=3):
             entry["taxon_id"] = taxon.get("id")
             entry["scientific_name"] = taxon.get("name", "")
             entry["common_name"] = taxon.get("preferred_common_name", "")
+
+            # Collect observation location
+            location = obs.get("location")
+            if location:
+                loc_dict = _parse_location(obs)
+                if loc_dict:
+                    entry["locations"].append(loc_dict)
 
         if len(results) < 200:
             break
@@ -117,34 +159,9 @@ def get_species_observations_in_ca(taxon_id, max_pages=5):
         if not results:
             break
         for obs in results:
-            location = obs.get("location")
-            if not location:
-                continue
-            # location can be a list [lat, lng] or a string "lat,lng"
-            if isinstance(location, (list, tuple)):
-                if len(location) != 2:
-                    continue
-                try:
-                    lat, lng = float(location[0]), float(location[1])
-                except (ValueError, TypeError):
-                    continue
-            else:
-                parts = location.split(",")
-                if len(parts) != 2:
-                    continue
-                try:
-                    lat, lng = float(parts[0]), float(parts[1])
-                except ValueError:
-                    continue
-            observed_on = obs.get("observed_on", "")
-            if hasattr(observed_on, "isoformat"):
-                observed_on = observed_on.isoformat()[:10]
-            observations.append({
-                "lat": lat,
-                "lng": lng,
-                "observed_on": str(observed_on) if observed_on else "",
-                "place_guess": obs.get("place_guess", ""),
-            })
+            loc_dict = _parse_location(obs)
+            if loc_dict:
+                observations.append(loc_dict)
         if len(results) < 200:
             break
 
