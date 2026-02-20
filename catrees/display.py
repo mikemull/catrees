@@ -68,11 +68,12 @@ def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
             f"{obs['lat']:.4f}",
             f"{obs['lng']:.4f}",
             obs.get("observed_on", ""),
+            f"https://maps.google.com/?q={obs['lat']},{obs['lng']}",
         ])
 
     click.echo(tabulate(
         table,
-        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On"],
+        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On", "Map"],
         tablefmt="simple",
     ))
     click.echo(f"\nShowing {min(limit, len(sorted_observations))} of {len(sorted_observations)} observations")
