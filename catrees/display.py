@@ -53,7 +53,7 @@ def show_clusters(clusters, species_name):
     click.echo(f"\n{total} total observations across {len(clusters)} locations")
 
 
-def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
+def show_nearest(sorted_observations, from_lat, from_lng, limit=60):
     """Display observations sorted by distance from a given point."""
     if not sorted_observations:
         click.echo("No observations found.")
@@ -68,12 +68,12 @@ def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
             f"{obs['lat']:.4f}",
             f"{obs['lng']:.4f}",
             obs.get("observed_on", ""),
-            f"https://maps.google.com/?q={obs['lat']},{obs['lng']}",
+            obs.get("uri", ""),
         ])
 
     click.echo(tabulate(
         table,
-        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On", "Map"],
+        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On", "iNaturalist"],
         tablefmt="simple",
     ))
     click.echo(f"\nShowing {min(limit, len(sorted_observations))} of {len(sorted_observations)} observations")
@@ -107,6 +107,20 @@ def map_nearest(sorted_observations, from_lat, from_lng, species_name, path):
 
     m.save(path)
     click.echo(f"Map saved to {path}")
+
+
+def show_places(places):
+    """Display saved places as a table."""
+    if not places:
+        click.echo("No places saved. Use 'catrees places add' to save a location.")
+        return
+
+    table = [
+        [p["id"], p["name"], f"{p['lat']:.6f}", f"{p['lng']:.6f}"]
+        for p in places
+    ]
+    click.echo(tabulate(table, headers=["ID", "Name", "Lat", "Lng"], tablefmt="simple"))
+    click.echo(f"\n{len(places)} places")
 
 
 def show_targets(targets, detail=False):

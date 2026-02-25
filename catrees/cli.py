@@ -51,13 +51,34 @@ def sync_taxa():
             click.echo(f"  - {name}")
 
 
+def _resolve_location(from_place, lat, lng):
+    """Resolve --from / --lat / --lng to a (lat, lng) tuple, or return None on error."""
+    if from_place is not None:
+        db.ensure_places_table()
+        place = db.find_place(from_place)
+        if place is None:
+            click.echo(f"Place '{from_place}' not found. Use 'catrees places list' to see saved places.")
+            return None
+        return (place["lat"], place["lng"])
+    elif lat is not None and lng is not None:
+        return (lat, lng)
+    else:
+        click.echo("Provide either --from <place> or both --lat and --lng.")
+        return None
+
+
 @cli.command()
-@click.option("--lat", required=True, type=float, help="Latitude")
-@click.option("--lng", required=True, type=float, help="Longitude")
+@click.option("--lat", default=None, type=float, help="Latitude")
+@click.option("--lng", default=None, type=float, help="Longitude")
+@click.option("--from", "from_place", default=None, help="Named place to search from")
 @click.option("--radius", default=10, type=float, help="Search radius in km")
 @click.option("--user", default=None, help="iNaturalist username to exclude already-seen species")
-def nearby(lat, lng, radius, user):
+def nearby(lat, lng, from_place, radius, user):
     """Find CA native trees observed near a location."""
+    coords = _resolve_location(from_place, lat, lng)
+    if coords is None:
+        return
+    lat, lng = coords
     click.echo(f"Searching for native trees within {radius}km of ({lat}, {lng})...")
 
     # Get taxon IDs for our known CA native trees
@@ -69,21 +90,28 @@ def nearby(lat, lng, radius, user):
     # Get iNat observations filtered to our native tree taxa
     inat_species = inat.get_nearby_observations(lat, lng, radius, taxon_ids=taxon_ids)
 
-    # Exclude already-observed species (also match subspecies to their parent binomial)
+    # Exclude already-observed species, normalizing rank markers and handling
+    # binomial/trinomial mismatches (e.g. iNat may record 'Prunus ilicifolia'
+    # when the DB has 'Prunus ilicifolia ssp. ilicifolia', or vice versa).
     if user:
         click.echo(f"Fetching life list for iNaturalist user '{user}'...")
-        seen = inat.get_user_life_list(user)
+        raw_seen = inat.get_user_life_list(user)
     else:
-        seen = db.get_observed_scientific_names()
+        raw_seen = db.get_observed_scientific_names()
+
+    seen_normalized = {" ".join(inat.normalize_name(n)) for n in raw_seen}
+    seen_binomials = {" ".join(inat.normalize_name(n)[:2]) for n in raw_seen}
 
     def is_seen(sci_name):
-        name = sci_name.lower()
-        if name in seen:
+        parts = inat.normalize_name(sci_name)
+        if " ".join(parts) in seen_normalized:
             return True
-        # Check binomial (genus + epithet) for subspecies/variety matches
-        parts = name.split()
-        if len(parts) > 2:
-            return " ".join(parts[:2]) in seen
+        # Trinomial observation — check its binomial against seen
+        if len(parts) > 2 and " ".join(parts[:2]) in seen_binomials:
+            return True
+        # Binomial observation — check if any seen trinomial shares it
+        if len(parts) == 2 and " ".join(parts) in seen_binomials:
+            return True
         return False
 
     inat_species = [s for s in inat_species if not is_seen(s["scientific_name"])]
@@ -161,11 +189,16 @@ def find(name):
 
 @cli.command()
 @click.argument("name")
-@click.option("--lat", required=True, type=float, help="Latitude of reference point")
-@click.option("--lng", required=True, type=float, help="Longitude of reference point")
+@click.option("--lat", default=None, type=float, help="Latitude of reference point")
+@click.option("--lng", default=None, type=float, help="Longitude of reference point")
+@click.option("--from", "from_place", default=None, help="Named place to search from")
 @click.option("--map", "map_path", default=None, type=click.Path(), help="Save an HTML map to this path")
-def nearest(name, lat, lng, map_path):
+def nearest(name, lat, lng, from_place, map_path):
     """Find the closest observations of a species to a given point."""
+    coords = _resolve_location(from_place, lat, lng)
+    if coords is None:
+        return
+    lat, lng = coords
     result = inat.resolve_taxon(name)
     if not result:
         click.echo(f"Could not find '{name}' on iNaturalist.")
@@ -193,7 +226,8 @@ def nearest(name, lat, lng, map_path):
 @cli.command()
 @click.argument("name")
 @click.option("--county", required=True, help="County name where observed")
-def observe(name, county):
+@click.option("--date", "observed_on", default=None, help="Date observed (YYYY-MM-DD, defaults to today)")
+def observe(name, county, observed_on):
     """Record a personal observation of a species."""
     sp = db.find_species_by_name(name)
     if not sp:
@@ -206,8 +240,9 @@ def observe(name, county):
         click.echo(f"County '{county}' not found in database.")
         return
 
-    db.record_observation(sp["id"], county_id=county_id)
-    click.echo(f"Recorded observation of {sp['common_name']} ({sp['scientific_name']}) in {county} County")
+    db.record_observation(sp["id"], county_id=county_id, observed_on=observed_on)
+    date_str = f" on {observed_on}" if observed_on else ""
+    click.echo(f"Recorded observation of {sp['common_name']} ({sp['scientific_name']}) in {county} County{date_str}")
 
 
 @cli.group(invoke_without_command=True)
@@ -230,6 +265,46 @@ def targets_remove(target_id):
         click.echo(f"Removed target {target_id}.")
     else:
         click.echo(f"Target {target_id} not found.")
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def places(ctx):
+    """Manage saved locations."""
+    if ctx.invoked_subcommand is None:
+        db.ensure_places_table()
+        display.show_places(db.get_places())
+
+
+@places.command("list")
+def places_list():
+    """List all saved locations."""
+    db.ensure_places_table()
+    display.show_places(db.get_places())
+
+
+@places.command("add")
+@click.argument("name")
+@click.option("--lat", required=True, type=float, help="Latitude")
+@click.option("--lng", required=True, type=float, help="Longitude")
+def places_add(name, lat, lng):
+    """Save a named location."""
+    db.ensure_places_table()
+    if db.add_place(name, lat, lng):
+        click.echo(f"Saved place '{name}' at ({lat}, {lng}).")
+    else:
+        click.echo(f"A place named '{name}' already exists.")
+
+
+@places.command("remove")
+@click.argument("place_id", type=int)
+def places_remove(place_id):
+    """Remove a saved location by ID."""
+    db.ensure_places_table()
+    if db.remove_place(place_id):
+        click.echo(f"Removed place {place_id}.")
+    else:
+        click.echo(f"Place {place_id} not found.")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,22 @@
 """iNaturalist API wrapper using pyinaturalist."""
 
 import math
+import re
 from collections import defaultdict
 
 from pyinaturalist import get_observations, get_taxa
+
+_RANK_MARKERS = re.compile(r'\b(ssp|subsp|var|f)\.\s*', re.IGNORECASE)
+
+
+def normalize_name(name):
+    """Normalize a scientific name for comparison.
+
+    Strips rank markers and lowercases, returning a list of name tokens:
+      'Prunus ilicifolia ssp. ilicifolia' -> ['prunus', 'ilicifolia', 'ilicifolia']
+      'Prunus ilicifolia'                 -> ['prunus', 'ilicifolia']
+    """
+    return _RANK_MARKERS.sub('', name).lower().split()
 
 CA_PLACE_ID = 14  # California
 
@@ -50,6 +63,7 @@ def _parse_location(obs):
         "lng": lng,
         "observed_on": str(observed_on) if observed_on else "",
         "place_guess": obs.get("place_guess", ""),
+        "uri": obs.get("uri", ""),
     }
 
 
