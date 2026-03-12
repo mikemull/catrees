@@ -104,6 +104,17 @@ def get_observed_scientific_names():
         return {row[0] for row in cur.fetchall()}
 
 
+def get_observed_taxon_ids():
+    """Return set of inat_taxon_ids for species the user has observed locally."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT s.inat_taxon_id "
+            "FROM observations o JOIN species s ON s.id = o.species_id "
+            "WHERE s.inat_taxon_id IS NOT NULL"
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
 def find_county(name):
     """Find a county ID by name (case-insensitive partial match)."""
     with get_cursor() as cur:
@@ -122,12 +133,17 @@ def find_county(name):
         return row[0] if row else None
 
 
-def record_observation(species_id, county_id=None):
-    """Record a personal observation."""
+def record_observation(species_id, county_id=None, observed_on=None):
+    """Record a personal observation. observed_on defaults to today if not provided.
+
+    Silently ignores duplicate (species_id, county_id, observed_on) combinations.
+    """
     with get_cursor() as cur:
         cur.execute(
-            "INSERT INTO observations (species_id, county_id) VALUES (%s, %s)",
-            (species_id, county_id),
+            "INSERT INTO observations (species_id, county_id, observed_on) "
+            "VALUES (%s, %s, COALESCE(%s, CURRENT_DATE)) "
+            "ON CONFLICT (species_id, county_id, observed_on) DO NOTHING",
+            (species_id, county_id, observed_on),
         )
 
 
@@ -255,4 +271,61 @@ def remove_target(target_id):
     """
     with get_cursor() as cur:
         cur.execute("DELETE FROM targets WHERE id = %s", (target_id,))
+        return cur.rowcount > 0
+
+
+def ensure_places_table():
+    """Create the places table if it doesn't exist."""
+    with get_cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS places (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                lat DOUBLE PRECISION NOT NULL,
+                lng DOUBLE PRECISION NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+
+def add_place(name, lat, lng):
+    """Insert a named place.
+
+    Returns True if added, False if a place with that name already exists (case-insensitive).
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id FROM places WHERE lower(name) = lower(%s)",
+            (name,),
+        )
+        if cur.fetchone():
+            return False
+        cur.execute(
+            "INSERT INTO places (name, lat, lng) VALUES (%s, %s, %s)",
+            (name.lower(), lat, lng),
+        )
+        return True
+
+
+def get_places():
+    """Return all places ordered by name."""
+    with get_cursor() as cur:
+        cur.execute("SELECT id, name, lat, lng, created_at FROM places ORDER BY name")
+        return cur.fetchall()
+
+
+def find_place(name):
+    """Find a single place by name (case-insensitive). Returns row or None."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, name, lat, lng FROM places WHERE lower(name) = lower(%s)",
+            (name,),
+        )
+        return cur.fetchone()
+
+
+def remove_place(place_id):
+    """Delete a place by ID. Returns True if deleted, False if not found."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM places WHERE id = %s", (place_id,))
         return cur.rowcount > 0

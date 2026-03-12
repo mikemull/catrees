@@ -53,7 +53,7 @@ def show_clusters(clusters, species_name):
     click.echo(f"\n{total} total observations across {len(clusters)} locations")
 
 
-def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
+def show_nearest(sorted_observations, from_lat, from_lng, limit=60, trail_flags=None, trail_radius=0.5):
     """Display observations sorted by distance from a given point."""
     if not sorted_observations:
         click.echo("No observations found.")
@@ -61,22 +61,28 @@ def show_nearest(sorted_observations, from_lat, from_lng, limit=20):
 
     table = []
     for i, (dist, obs) in enumerate(sorted_observations[:limit], 1):
-        table.append([
+        row = [
             i,
             f"{dist:.1f}",
             obs.get("place_guess", ""),
             f"{obs['lat']:.4f}",
             f"{obs['lng']:.4f}",
             obs.get("observed_on", ""),
-            f"https://maps.google.com/?q={obs['lat']},{obs['lng']}",
-        ])
+            obs.get("uri", ""),
+        ]
+        if trail_flags is not None:
+            row.append("*" if trail_flags[i - 1] else "")
+        table.append(row)
 
-    click.echo(tabulate(
-        table,
-        headers=["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On", "Map"],
-        tablefmt="simple",
-    ))
+    headers = ["#", "Distance (km)", "Place", "Lat", "Lng", "Observed On", "iNaturalist"]
+    if trail_flags is not None:
+        headers.append("Trail")
+
+    click.echo(tabulate(table, headers=headers, tablefmt="simple"))
     click.echo(f"\nShowing {min(limit, len(sorted_observations))} of {len(sorted_observations)} observations")
+    if trail_flags is not None:
+        near_count = sum(trail_flags)
+        click.echo(f"* = within {trail_radius} km of a hiking trail ({near_count} of {len(trail_flags)} observations)")
 
 
 def map_nearest(sorted_observations, from_lat, from_lng, species_name, path):
@@ -107,6 +113,81 @@ def map_nearest(sorted_observations, from_lat, from_lng, species_name, path):
 
     m.save(path)
     click.echo(f"Map saved to {path}")
+
+
+def show_trail_obs(species_list, trail_name, trail_radius, node_count):
+    """Display CA native tree observations near a named trail.
+
+    species_list: list of dicts with taxon_id, scientific_name, common_name, count
+    """
+    if not species_list:
+        click.echo(f"No CA native tree observations found within {trail_radius} km of {trail_name}.")
+        return
+
+    click.echo(f"Observations of CA native trees within {trail_radius} km of {trail_name}:\n")
+    table = [
+        [i, s["common_name"] or "", s["scientific_name"], s["count"]]
+        for i, s in enumerate(species_list, 1)
+    ]
+    click.echo(tabulate(table, headers=["#", "Common Name", "Scientific Name", "Observations"], tablefmt="simple"))
+    click.echo(f"\n{len(species_list)} species found near {trail_name} ({node_count:,} trail nodes, {trail_radius} km radius)")
+
+
+def map_trail_obs(species_list, trail_nodes, trail_name, path):
+    """Generate a folium HTML map of observations near a trail."""
+    import folium
+
+    if trail_nodes:
+        center_lat = sum(n[0] for n in trail_nodes) / len(trail_nodes)
+        center_lng = sum(n[1] for n in trail_nodes) / len(trail_nodes)
+    else:
+        center_lat, center_lng = 37.0, -119.5  # California center fallback
+
+    m = folium.Map(location=[center_lat, center_lng], zoom_start=9)
+
+    # Trail nodes as small dots
+    for lat, lng in trail_nodes:
+        folium.CircleMarker(
+            location=[lat, lng],
+            radius=2,
+            color="#8B4513",
+            fill=True,
+            fill_opacity=0.5,
+            weight=1,
+        ).add_to(m)
+
+    # Observation markers grouped by species
+    for sp in species_list:
+        for loc in sp.get("locations", []):
+            popup_text = (
+                f"{sp['common_name'] or sp['scientific_name']}<br>"
+                f"{sp['scientific_name']}<br>"
+                f"{loc.get('observed_on', '')}<br>"
+                f"{loc.get('place_guess', '')}<br>"
+                f"<a href='{loc.get('uri', '')}' target='_blank'>View on iNat</a>"
+            )
+            folium.Marker(
+                [loc["lat"], loc["lng"]],
+                popup=popup_text,
+                icon=folium.Icon(color="green", icon="tree", prefix="fa"),
+            ).add_to(m)
+
+    m.save(path)
+    click.echo(f"Map saved to {path}")
+
+
+def show_places(places):
+    """Display saved places as a table."""
+    if not places:
+        click.echo("No places saved. Use 'catrees places add' to save a location.")
+        return
+
+    table = [
+        [p["id"], p["name"], f"{p['lat']:.6f}", f"{p['lng']:.6f}"]
+        for p in places
+    ]
+    click.echo(tabulate(table, headers=["ID", "Name", "Lat", "Lng"], tablefmt="simple"))
+    click.echo(f"\n{len(places)} places")
 
 
 def show_targets(targets, detail=False):
