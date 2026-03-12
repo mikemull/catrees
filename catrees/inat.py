@@ -1,10 +1,15 @@
 """iNaturalist API wrapper using pyinaturalist."""
 
+import json
 import math
 import re
+import urllib.parse
+import urllib.request
 from collections import defaultdict
 
 from pyinaturalist import get_observations, get_taxa
+
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 _RANK_MARKERS = re.compile(r'\b(ssp|subsp|var|f)\.\s*', re.IGNORECASE)
 
@@ -125,9 +130,9 @@ def get_nearby_observations(lat, lng, radius_km, taxon_ids=None, max_pages=3):
     return sorted(species_counts.values(), key=lambda x: x["count"], reverse=True)
 
 
-def get_user_life_list(username):
-    """Fetch the set of species (lowercase scientific names) a user has observed on iNaturalist."""
-    species_names = set()
+def get_user_life_list_taxon_ids(username):
+    """Fetch the set of iNat taxon IDs a user has observed (research-grade)."""
+    taxon_ids = set()
     page = 1
     while True:
         response = get_observations(
@@ -141,13 +146,13 @@ def get_user_life_list(username):
             break
         for obs in results:
             taxon = obs.get("taxon")
-            if taxon and taxon.get("name"):
-                species_names.add(taxon["name"].lower())
+            if taxon and taxon.get("id"):
+                taxon_ids.add(taxon["id"])
         if len(results) < 200:
             break
         page += 1
 
-    return species_names
+    return taxon_ids
 
 
 def resolve_taxon(name):
@@ -201,6 +206,138 @@ def get_species_observations_in_ca(taxon_id, max_pages=5):
             break
 
     return observations
+
+
+class TrailNotFoundError(Exception):
+    def __init__(self, trail_name):
+        self.trail_name = trail_name
+        super().__init__(f"Trail not found in OSM: {trail_name!r}")
+
+
+def get_trail_by_name(trail_name, timeout=60):
+    """Fetch geometry nodes for a named trail in California from Overpass.
+
+    Queries both OSM way and relation elements tagged as hiking trails.
+    Returns a list of (lat, lng) tuples. Raises TrailNotFoundError if not found.
+    """
+    safe_name = trail_name.replace("\\", "\\\\").replace('"', '\\"')
+    query = (
+        f'[out:json][timeout:{timeout}];'
+        f'area["ISO3166-2"="US-CA"]->.ca;'
+        f'('
+        f'way["highway"~"^(path|footway|track)$"]["name"="{safe_name}"](area.ca);'
+        f'relation["type"="route"]["name"="{safe_name}"](area.ca);'
+        f');'
+        f'out geom;'
+    )
+    data = urllib.parse.urlencode({"data": query}).encode()
+    req = urllib.request.Request(OVERPASS_URL, data=data)
+    with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
+        result = json.loads(resp.read())
+
+    nodes = set()
+    for element in result.get("elements", []):
+        if element.get("type") == "way":
+            for node in element.get("geometry", []):
+                nodes.add((node["lat"], node["lon"]))
+        elif element.get("type") == "relation":
+            for member in element.get("members", []):
+                if member.get("type") == "way":
+                    for node in member.get("geometry", []):
+                        nodes.add((node["lat"], node["lon"]))
+
+    if not nodes:
+        raise TrailNotFoundError(trail_name)
+
+    return list(nodes)
+
+
+def trail_bbox(trail_nodes, padding_km=0.5):
+    """Compute a bounding box around trail nodes with padding.
+
+    Returns (min_lat, min_lng, max_lat, max_lng).
+    Padding: 1 km ≈ 0.009 degrees.
+    """
+    padding_deg = padding_km * 0.009
+    lats = [n[0] for n in trail_nodes]
+    lngs = [n[1] for n in trail_nodes]
+    return (
+        min(lats) - padding_deg,
+        min(lngs) - padding_deg,
+        max(lats) + padding_deg,
+        max(lngs) + padding_deg,
+    )
+
+
+def get_observations_in_bbox(min_lat, min_lng, max_lat, max_lng, taxon_ids, max_pages=10):
+    """Fetch research-grade observations within a bounding box.
+
+    Returns a list of dicts with keys: lat, lng, observed_on, place_guess,
+    uri, taxon_id, scientific_name, common_name.
+    """
+    observations = []
+    for page in range(1, max_pages + 1):
+        response = get_observations(
+            swlat=min_lat,
+            swlng=min_lng,
+            nelat=max_lat,
+            nelng=max_lng,
+            taxon_id=taxon_ids,
+            quality_grade="research",
+            per_page=200,
+            page=page,
+        )
+        results = response.get("results", [])
+        if not results:
+            break
+        for obs in results:
+            loc = _parse_location(obs)
+            if not loc:
+                continue
+            taxon = obs.get("taxon") or {}
+            observations.append({
+                "lat": loc["lat"],
+                "lng": loc["lng"],
+                "observed_on": loc["observed_on"],
+                "place_guess": loc["place_guess"],
+                "uri": loc["uri"],
+                "taxon_id": taxon.get("id"),
+                "scientific_name": taxon.get("name", ""),
+                "common_name": taxon.get("preferred_common_name", ""),
+            })
+        if len(results) < 200:
+            break
+    return observations
+
+
+def get_trails_in_bbox(min_lat, min_lng, max_lat, max_lng, timeout=30):
+    """Fetch hiking trail geometry nodes from OSM within a bounding box.
+
+    Queries ways tagged as path, footway, or track.
+    Returns a list of (lat, lng) tuples representing trail nodes.
+    """
+    bbox = f"{min_lat},{min_lng},{max_lat},{max_lng}"
+    query = (
+        f'[out:json][timeout:{timeout}];'
+        f'(way["highway"~"^(path|footway|track)$"]({bbox}););'
+        f'out geom;'
+    )
+    data = urllib.parse.urlencode({"data": query}).encode()
+    req = urllib.request.Request(OVERPASS_URL, data=data)
+    with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
+        result = json.loads(resp.read())
+
+    nodes = []
+    for element in result.get("elements", []):
+        if element.get("type") == "way":
+            for node in element.get("geometry", []):
+                nodes.append((node["lat"], node["lon"]))
+    return nodes
+
+
+def is_near_trail(lat, lng, trail_nodes, threshold_km=0.5):
+    """Return True if (lat, lng) is within threshold_km of any trail node."""
+    return any(haversine_km(lat, lng, tn[0], tn[1]) <= threshold_km for tn in trail_nodes)
 
 
 def cluster_observations(observations, grid_size=0.1):

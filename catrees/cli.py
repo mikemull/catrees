@@ -90,31 +90,35 @@ def nearby(lat, lng, from_place, radius, user):
     # Get iNat observations filtered to our native tree taxa
     inat_species = inat.get_nearby_observations(lat, lng, radius, taxon_ids=taxon_ids)
 
-    # Exclude already-observed species, normalizing rank markers and handling
-    # binomial/trinomial mismatches (e.g. iNat may record 'Prunus ilicifolia'
-    # when the DB has 'Prunus ilicifolia ssp. ilicifolia', or vice versa).
+    # Exclude already-observed species. Primary match is by iNat taxon_id to
+    # handle synonyms (e.g. iNat returns 'Sambucus cerulea' but DB has
+    # 'Sambucus mexicana' — same taxon_id, different name). Fall back to
+    # normalized name matching for any DB species not yet sync'd with a taxon_id.
     if user:
         click.echo(f"Fetching life list for iNaturalist user '{user}'...")
-        raw_seen = inat.get_user_life_list(user)
+        seen_taxon_ids = inat.get_user_life_list_taxon_ids(user)
+        seen_normalized = set()
+        seen_binomials = set()
     else:
+        seen_taxon_ids = db.get_observed_taxon_ids()
         raw_seen = db.get_observed_scientific_names()
+        seen_normalized = {" ".join(inat.normalize_name(n)) for n in raw_seen}
+        seen_binomials = {" ".join(inat.normalize_name(n)[:2]) for n in raw_seen}
 
-    seen_normalized = {" ".join(inat.normalize_name(n)) for n in raw_seen}
-    seen_binomials = {" ".join(inat.normalize_name(n)[:2]) for n in raw_seen}
-
-    def is_seen(sci_name):
-        parts = inat.normalize_name(sci_name)
+    def is_seen(sp):
+        if sp.get("taxon_id") and sp["taxon_id"] in seen_taxon_ids:
+            return True
+        # Name fallback for DB species without a resolved taxon_id
+        parts = inat.normalize_name(sp["scientific_name"])
         if " ".join(parts) in seen_normalized:
             return True
-        # Trinomial observation — check its binomial against seen
         if len(parts) > 2 and " ".join(parts[:2]) in seen_binomials:
             return True
-        # Binomial observation — check if any seen trinomial shares it
         if len(parts) == 2 and " ".join(parts) in seen_binomials:
             return True
         return False
 
-    inat_species = [s for s in inat_species if not is_seen(s["scientific_name"])]
+    inat_species = [s for s in inat_species if not is_seen(s)]
 
     display.show_nearby_results(inat_species)
 
@@ -193,7 +197,10 @@ def find(name):
 @click.option("--lng", default=None, type=float, help="Longitude of reference point")
 @click.option("--from", "from_place", default=None, help="Named place to search from")
 @click.option("--map", "map_path", default=None, type=click.Path(), help="Save an HTML map to this path")
-def nearest(name, lat, lng, from_place, map_path):
+@click.option("--trails", is_flag=True, default=False, help="Flag observations near hiking trails")
+@click.option("--trail-radius", default=0.5, type=float, help="Max km to a trail to count as nearby (default: 0.5)")
+@click.option("--limit", default=50, type=int, help="Max observations to show (default: 50)")
+def nearest(name, lat, lng, from_place, map_path, trails, trail_radius, limit):
     """Find the closest observations of a species to a given point."""
     coords = _resolve_location(from_place, lat, lng)
     if coords is None:
@@ -217,10 +224,105 @@ def nearest(name, lat, lng, from_place, map_path):
         ((inat.haversine_km(lat, lng, obs["lat"], obs["lng"]), obs) for obs in observations),
         key=lambda x: x[0],
     )
-    display.show_nearest(sorted_obs, lat, lng)
+    top_obs = sorted_obs[:limit]
+
+    trail_flags = None
+    if trails:
+        click.echo(f"Fetching hiking trails near top {len(top_obs)} observations...")
+        lats = [obs["lat"] for _, obs in top_obs]
+        lngs = [obs["lng"] for _, obs in top_obs]
+        padding = 0.02  # ~2 km buffer
+        try:
+            trail_nodes = inat.get_trails_in_bbox(
+                min(lats) - padding, min(lngs) - padding,
+                max(lats) + padding, max(lngs) + padding,
+            )
+            click.echo(f"Found {len(trail_nodes)} trail nodes.")
+            trail_flags = [
+                inat.is_near_trail(obs["lat"], obs["lng"], trail_nodes, trail_radius)
+                for _, obs in top_obs
+            ]
+        except Exception as e:
+            click.echo(f"Could not fetch trail data: {e}")
+
+    display.show_nearest(top_obs, lat, lng, trail_flags=trail_flags, trail_radius=trail_radius)
 
     if map_path:
         display.map_nearest(sorted_obs, lat, lng, display_name, map_path)
+
+
+@cli.command("trail-obs")
+@click.argument("name")
+@click.option("--trail-radius", default=0.5, type=float, show_default=True, help="Max km from trail to count as nearby")
+@click.option("--limit", default=50, type=int, show_default=True, help="Max species rows to display")
+@click.option("--map", "map_path", default=None, type=click.Path(), help="Save an HTML map to this path")
+def trail_obs(name, trail_radius, limit, map_path):
+    """Show CA native trees observed near a named trail."""
+    taxon_ids = db.get_native_taxon_ids()
+    if not taxon_ids:
+        click.echo("No taxon IDs found. Run 'catrees sync-taxa' first.")
+        return
+
+    click.echo(f"Looking up trail '{name}' in OpenStreetMap...")
+    try:
+        trail_nodes = inat.get_trail_by_name(name)
+    except inat.TrailNotFoundError as e:
+        click.echo(str(e))
+        return
+    except Exception as e:
+        click.echo(f"Could not fetch trail data: {e}")
+        return
+    click.echo(f"Found {len(trail_nodes):,} trail nodes.")
+
+    # Compute geographic span and warn if trail name is ambiguous
+    lats = [n[0] for n in trail_nodes]
+    lngs = [n[1] for n in trail_nodes]
+    width_km = inat.haversine_km(min(lats), min(lngs), min(lats), max(lngs))
+    height_km = inat.haversine_km(min(lats), min(lngs), max(lats), min(lngs))
+    click.echo(f"Trail spans {width_km:.0f} km × {height_km:.0f} km.")
+    if width_km > 500 or height_km > 500:
+        click.echo(
+            "Warning: Trail spans a very large area — results may include multiple "
+            "unrelated trails sharing the same name."
+        )
+
+    min_lat, min_lng, max_lat, max_lng = inat.trail_bbox(trail_nodes, padding_km=trail_radius)
+    click.echo(f"Fetching iNaturalist observations in bbox ({min_lat:.3f}, {min_lng:.3f}) — ({max_lat:.3f}, {max_lng:.3f})...")
+    raw_obs = inat.get_observations_in_bbox(min_lat, min_lng, max_lat, max_lng, taxon_ids)
+    click.echo(f"Filtering {len(raw_obs)} observations to within {trail_radius} km of trail...")
+
+    # Filter to observations near the trail geometry
+    near_obs = [
+        obs for obs in raw_obs
+        if inat.is_near_trail(obs["lat"], obs["lng"], trail_nodes, trail_radius)
+    ]
+
+    # Aggregate by taxon
+    species_map = {}
+    for obs in near_obs:
+        tid = obs["taxon_id"]
+        if tid not in species_map:
+            species_map[tid] = {
+                "taxon_id": tid,
+                "scientific_name": obs["scientific_name"],
+                "common_name": obs["common_name"],
+                "count": 0,
+                "locations": [],
+            }
+        species_map[tid]["count"] += 1
+        species_map[tid]["locations"].append({
+            "lat": obs["lat"],
+            "lng": obs["lng"],
+            "observed_on": obs["observed_on"],
+            "place_guess": obs["place_guess"],
+            "uri": obs["uri"],
+        })
+
+    species_list = sorted(species_map.values(), key=lambda s: s["count"], reverse=True)[:limit]
+    display.show_trail_obs(species_list, name, trail_radius, len(trail_nodes))
+
+    if map_path:
+        display.map_trail_obs(species_list, trail_nodes, name, map_path)
 
 
 @cli.command()

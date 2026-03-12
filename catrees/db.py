@@ -104,6 +104,17 @@ def get_observed_scientific_names():
         return {row[0] for row in cur.fetchall()}
 
 
+def get_observed_taxon_ids():
+    """Return set of inat_taxon_ids for species the user has observed locally."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT s.inat_taxon_id "
+            "FROM observations o JOIN species s ON s.id = o.species_id "
+            "WHERE s.inat_taxon_id IS NOT NULL"
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
 def find_county(name):
     """Find a county ID by name (case-insensitive partial match)."""
     with get_cursor() as cur:
