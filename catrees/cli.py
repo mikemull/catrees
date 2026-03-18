@@ -196,11 +196,12 @@ def find(name):
 @click.option("--lat", default=None, type=float, help="Latitude of reference point")
 @click.option("--lng", default=None, type=float, help="Longitude of reference point")
 @click.option("--from", "from_place", default=None, help="Named place to search from")
-@click.option("--map", "map_path", default=None, type=click.Path(), help="Save an HTML map to this path")
+@click.option("--out", "out_path", default=None, type=click.Path(), help="Output HTML file path (default: nearest_<species>.html)")
+@click.option("--no-web", is_flag=True, default=False, help="Print results to terminal instead of generating a web page")
 @click.option("--trails", is_flag=True, default=False, help="Flag observations near hiking trails")
 @click.option("--trail-radius", default=0.5, type=float, help="Max km to a trail to count as nearby (default: 0.5)")
 @click.option("--limit", default=50, type=int, help="Max observations to show (default: 50)")
-def nearest(name, lat, lng, from_place, map_path, trails, trail_radius, limit):
+def nearest(name, lat, lng, from_place, out_path, no_web, trails, trail_radius, limit):
     """Find the closest observations of a species to a given point."""
     coords = _resolve_location(from_place, lat, lng)
     if coords is None:
@@ -245,10 +246,16 @@ def nearest(name, lat, lng, from_place, map_path, trails, trail_radius, limit):
         except Exception as e:
             click.echo(f"Could not fetch trail data: {e}")
 
-    display.show_nearest(top_obs, lat, lng, trail_flags=trail_flags, trail_radius=trail_radius)
-
-    if map_path:
-        display.map_nearest(sorted_obs, lat, lng, display_name, map_path)
+    if no_web:
+        display.show_nearest(top_obs, lat, lng, trail_flags=trail_flags, trail_radius=trail_radius)
+    else:
+        import webbrowser, os
+        if out_path is None:
+            safe_name = sci_name.lower().replace(" ", "_")
+            out_path = f"nearest_{safe_name}.html"
+        display.web_nearest(top_obs, lat, lng, display_name, out_path,
+                            trail_flags=trail_flags, trail_radius=trail_radius)
+        webbrowser.open("file://" + os.path.abspath(out_path))
 
 
 @cli.command("trail-obs")

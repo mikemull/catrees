@@ -115,6 +115,112 @@ def map_nearest(sorted_observations, from_lat, from_lng, species_name, path):
     click.echo(f"Map saved to {path}")
 
 
+def web_nearest(sorted_observations, from_lat, from_lng, species_name, path,
+                trail_flags=None, trail_radius=0.5):
+    """Generate an HTML page with an observation table and embedded folium map."""
+    import folium
+    import html as html_mod
+
+    m = folium.Map(location=[from_lat, from_lng], zoom_start=9)
+
+    folium.Marker(
+        [from_lat, from_lng],
+        popup="You",
+        icon=folium.Icon(color="red", icon="home", prefix="fa"),
+    ).add_to(m)
+
+    for i, (dist, obs) in enumerate(sorted_observations, 1):
+        popup_text = (
+            f"#{i} — {dist:.1f} km<br>"
+            f"{obs.get('place_guess', '')}<br>"
+            f"{obs.get('observed_on', '')}"
+        )
+        folium.Marker(
+            [obs["lat"], obs["lng"]],
+            popup=popup_text,
+            icon=folium.Icon(color="green", icon="tree", prefix="fa"),
+        ).add_to(m)
+
+    map_html = m._repr_html_()
+
+    # Build table rows
+    has_trails = trail_flags is not None
+    rows = []
+    for i, (dist, obs) in enumerate(sorted_observations, 1):
+        place = html_mod.escape(obs.get("place_guess", ""))
+        uri = obs.get("uri", "")
+        date = obs.get("observed_on", "")
+        trail_cell = ""
+        if has_trails:
+            trail_cell = f"<td>{'&#x2713;' if trail_flags[i - 1] else ''}</td>"
+        rows.append(
+            f"<tr>"
+            f"<td>{i}</td>"
+            f"<td>{dist:.1f}</td>"
+            f"<td>{place}</td>"
+            f"<td>{obs['lat']:.4f}</td>"
+            f"<td>{obs['lng']:.4f}</td>"
+            f"<td>{date}</td>"
+            f"<td><a href='{uri}' target='_blank'>view</a></td>"
+            f"{trail_cell}"
+            f"</tr>"
+        )
+
+    trail_header = "<th>Trail</th>" if has_trails else ""
+    trail_note = ""
+    if has_trails:
+        near_count = sum(trail_flags)
+        trail_note = f"<p>&#x2713; = within {trail_radius} km of a hiking trail ({near_count} of {len(trail_flags)} observations)</p>"
+
+    page_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nearest {html_mod.escape(species_name)}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; color: #333; }}
+  h1 {{ font-size: 1.4em; margin-bottom: 4px; }}
+  .subtitle {{ color: #666; margin-bottom: 16px; }}
+  .container {{ display: flex; gap: 20px; height: calc(100vh - 120px); }}
+  .table-panel {{ flex: 1; overflow-y: auto; min-width: 0; }}
+  .map-panel {{ flex: 1; min-width: 0; }}
+  .map-panel iframe, .map-panel .folium-map {{ width: 100% !important; height: 100% !important; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 0.85em; }}
+  th, td {{ text-align: left; padding: 5px 8px; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }}
+  th {{ position: sticky; top: 0; background: #f5f5f5; font-weight: 600; }}
+  tr:hover {{ background: #f9f9f9; }}
+  a {{ color: #2a7ae2; text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
+  .note {{ font-size: 0.85em; color: #666; margin-top: 8px; }}
+</style>
+</head>
+<body>
+<h1>Nearest {html_mod.escape(species_name)}</h1>
+<p class="subtitle">from ({from_lat:.4f}, {from_lng:.4f}) &middot; {len(sorted_observations)} observations</p>
+<div class="container">
+  <div class="table-panel">
+    <table>
+      <thead><tr>
+        <th>#</th><th>km</th><th>Place</th><th>Lat</th><th>Lng</th><th>Date</th><th>iNat</th>{trail_header}
+      </tr></thead>
+      <tbody>
+        {"".join(rows)}
+      </tbody>
+    </table>
+    {trail_note}
+  </div>
+  <div class="map-panel">
+    {map_html}
+  </div>
+</div>
+</body>
+</html>"""
+
+    with open(path, "w") as f:
+        f.write(page_html)
+    click.echo(f"Web page saved to {path}")
+
+
 def show_trail_obs(species_list, trail_name, trail_radius, node_count):
     """Display CA native tree observations near a named trail.
 
